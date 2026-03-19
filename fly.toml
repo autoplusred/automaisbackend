@@ -1,0 +1,28 @@
+# fly.toml — Deploy no Fly.io
+# fly launch --name automais-api --region gru
+
+app            = "automais-api"
+primary_region = "gru"
+
+[build]
+
+[env]
+  PORT      = "5000"
+  FLASK_ENV = "production"
+
+[http_service]
+  internal_port        = 5000
+  force_https          = true
+  auto_stop_machines   = true
+  auto_start_machines  = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type       = "connections"
+    hard_limit = 100
+    soft_limit = 80
+
+[[vm]]
+  memory   = "512mb"
+  cpu_kind = "shared"
+  cpus     = 1

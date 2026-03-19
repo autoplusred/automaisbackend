@@ -1,0 +1,38 @@
+version: "3.9"
+
+services:
+
+  db:
+    image: postgres:16-alpine
+    container_name: automais_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       automais
+      POSTGRES_USER:     automais
+      POSTGRES_PASSWORD: automais
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U automais"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    container_name: automais_api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    ports:
+      - "5000:5000"
+    volumes:
+      - .:/app
+
+volumes:
+  pg_data:
