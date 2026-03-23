@@ -1,5 +1,6 @@
 from flask import Blueprint, request, jsonify, current_app, g
 from datetime import datetime, timedelta, timezone
+from uuid import UUID
 import bcrypt
 import jwt
 from ..db import get_cursor
@@ -101,3 +102,87 @@ def trocar_senha():
         cur.execute("UPDATE usuarios SET senha_hash=%s WHERE id=%s", (novo_hash, g.usuario_id))
 
     return jsonify({"mensagem": "Senha atualizada"})
+
+
+@bp.post("/bootstrap")
+@require_auth
+def bootstrap():
+    d = request.get_json(silent=True) or {}
+    payload = getattr(g, "jwt_payload", {}) or {}
+    user_meta = payload.get("user_metadata", {}) or {}
+    app_meta = payload.get("app_metadata", {}) or {}
+
+    empresa_id = d.get("empresa_id") or g.empresa_id
+    usuario_id = g.usuario_id
+    email = (d.get("email") or payload.get("email") or "").strip().lower()
+    nome_usuario = (d.get("nome") or user_meta.get("nome") or payload.get("name") or email.split("@")[0] or "Administrador").strip()
+    perfil = d.get("perfil") or user_meta.get("perfil") or app_meta.get("perfil") or g.perfil or "proprietario"
+
+    empresa_nome = (d.get("empresa_nome") or d.get("nome_loja") or user_meta.get("empresa_nome") or "Minha Concessionária").strip()
+    cnpj = (d.get("cnpj") or user_meta.get("cnpj") or "").strip() or None
+    telefone = (d.get("telefone") or user_meta.get("telefone") or "").strip() or None
+    cidade = (d.get("cidade") or user_meta.get("cidade") or "").strip() or None
+    estado = (d.get("estado") or user_meta.get("estado") or "").strip().upper() or None
+
+    try:
+        UUID(str(empresa_id))
+        UUID(str(usuario_id))
+    except Exception:
+        return jsonify({"erro": "empresa_id ou usuário inválido"}), 400
+
+    if not email:
+        return jsonify({"erro": "Email do usuário não encontrado no token"}), 400
+
+    with get_cursor() as cur:
+        cur.execute("SELECT id FROM empresas WHERE id=%s", (str(empresa_id),))
+        empresa_exists = cur.fetchone()
+
+        if empresa_exists:
+            cur.execute(
+                """UPDATE empresas
+                   SET nome=%s,
+                       cnpj=COALESCE(%s, cnpj),
+                       telefone=COALESCE(%s, telefone),
+                       email=COALESCE(%s, email),
+                       cidade=COALESCE(%s, cidade),
+                       estado=COALESCE(%s, estado)
+                   WHERE id=%s""",
+                (empresa_nome, cnpj, telefone, email, cidade, estado, str(empresa_id)),
+            )
+        else:
+            cur.execute(
+                """INSERT INTO empresas
+                   (id, nome, cnpj, telefone, email, cidade, estado)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s)""",
+                (str(empresa_id), empresa_nome, cnpj, telefone, email, cidade, estado),
+            )
+
+        cur.execute("SELECT id FROM usuarios WHERE id=%s", (str(usuario_id),))
+        usuario_exists = cur.fetchone()
+        if usuario_exists:
+            cur.execute(
+                """UPDATE usuarios
+                   SET empresa_id=%s, nome=%s, email=%s, perfil=%s, ativo=TRUE
+                   WHERE id=%s""",
+                (str(empresa_id), nome_usuario, email, perfil, str(usuario_id)),
+            )
+        else:
+            cur.execute(
+                """INSERT INTO usuarios (id, empresa_id, nome, email, senha_hash, perfil, ativo)
+                   VALUES (%s,%s,%s,%s,%s,%s,TRUE)""",
+                (str(usuario_id), str(empresa_id), nome_usuario, email, "", perfil),
+            )
+
+        cur.execute("SELECT id FROM config_empresa WHERE empresa_id=%s", (str(empresa_id),))
+        cfg_exists = cur.fetchone()
+        if not cfg_exists:
+            cur.execute(
+                "INSERT INTO config_empresa (empresa_id, api_fipe, api_cep) VALUES (%s, TRUE, TRUE)",
+                (str(empresa_id),),
+            )
+
+    return jsonify({
+        "mensagem": "Ambiente inicializado com sucesso",
+        "empresa_id": str(empresa_id),
+        "usuario_id": str(usuario_id),
+    })

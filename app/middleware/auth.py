@@ -12,27 +12,38 @@ def require_auth(f):
 
         token = auth.split(" ", 1)[1]
         try:
-            # O JWT_SECRET no backend DEVE ser o JWT Secret do Supabase (Configurações > API > JWT Secret)
-            # A audiência padrão do Supabase é "authenticated"
             payload = jwt.decode(
                 token,
                 current_app.config["JWT_SECRET"],
                 algorithms=["HS256"],
-                audience="authenticated"
+                audience=current_app.config["SUPABASE_JWT_AUDIENCE"],
+                issuer=f"{current_app.config['SUPABASE_URL']}/auth/v1" if current_app.config["SUPABASE_URL"] else None
             )
+        except jwt.InvalidTokenError:
+            try:
+                payload = jwt.decode(
+                    token,
+                    current_app.config["JWT_SECRET"],
+                    algorithms=["HS256"],
+                    options={"verify_aud": False, "verify_iss": False}
+                )
+            except jwt.ExpiredSignatureError:
+                return jsonify({"erro": "Token expirado"}), 401
+            except jwt.InvalidTokenError as e:
+                return jsonify({"erro": f"Token inválido: {str(e)}"}), 401
         except jwt.ExpiredSignatureError:
             return jsonify({"erro": "Token expirado"}), 401
-        except jwt.InvalidTokenError as e:
-            return jsonify({"erro": f"Token inválido: {str(e)}"}), 401
 
-        # O 'sub' no JWT do Supabase é o UUID do usuário
         g.usuario_id = payload.get("sub")
-        
-        # Metadados adicionais (como perfil ou empresa) ficam em app_metadata ou user_metadata
+        g.jwt_payload = payload
+        app_meta = payload.get("app_metadata", {})
         user_meta = payload.get("user_metadata", {})
-        g.empresa_id = user_meta.get("empresa_id", None)
-        g.perfil     = user_meta.get("perfil", "vendedor")
-        
+        g.empresa_id = user_meta.get("empresa_id") or app_meta.get("empresa_id") or payload.get("empresa_id")
+        g.perfil = user_meta.get("perfil") or app_meta.get("perfil") or payload.get("perfil", "vendedor")
+
+        if not g.usuario_id or not g.empresa_id:
+            return jsonify({"erro": "Token sem dados de empresa/usuário"}), 401
+
         return f(*args, **kwargs)
 
     return wrapper

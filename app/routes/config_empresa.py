@@ -10,9 +10,9 @@ bp = Blueprint("config_empresa", __name__)
 def get_config():
     with get_cursor() as cur:
         cur.execute(
-            """SELECT c.*, e.nome AS empresa_nome, e.cnpj, e.telefone,
+            """SELECT c.*, e.id AS empresa_id, e.nome AS empresa_nome, e.cnpj, e.telefone,
                       e.email, e.cep, e.logradouro, e.numero,
-                      e.bairro, e.cidade, e.estado
+                      e.bairro, e.cidade, e.estado, e.plano, e.ativo, e.criado_em
                FROM config_empresa c
                JOIN empresas e ON e.id = c.empresa_id
                WHERE c.empresa_id=%s""",
