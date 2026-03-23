@@ -2,6 +2,47 @@ import jwt
 from functools import wraps
 from flask import request, jsonify, current_app, g
 
+def _decode_supabase_token(token):
+    supabase_url = current_app.config.get("SUPABASE_URL", "").rstrip("/")
+    audience = current_app.config.get("SUPABASE_JWT_AUDIENCE", "authenticated")
+    issuer = f"{supabase_url}/auth/v1" if supabase_url else None
+    header = jwt.get_unverified_header(token) or {}
+    alg = header.get("alg")
+
+    if alg == "RS256":
+        if not supabase_url:
+            raise jwt.InvalidTokenError("SUPABASE_URL não configurada para validar token RS256")
+        jwks_url = f"{supabase_url}/auth/v1/.well-known/jwks.json"
+        jwk_client = jwt.PyJWKClient(jwks_url)
+        signing_key = jwk_client.get_signing_key_from_jwt(token).key
+        return jwt.decode(
+            token,
+            signing_key,
+            algorithms=["RS256"],
+            audience=audience,
+            issuer=issuer,
+        )
+
+    if alg == "HS256" or not alg:
+        try:
+            return jwt.decode(
+                token,
+                current_app.config["JWT_SECRET"],
+                algorithms=["HS256"],
+                audience=audience,
+                issuer=issuer if issuer else None,
+                options={"verify_iss": bool(issuer)},
+            )
+        except jwt.InvalidTokenError:
+            return jwt.decode(
+                token,
+                current_app.config["JWT_SECRET"],
+                algorithms=["HS256"],
+                options={"verify_aud": False, "verify_iss": False},
+            )
+
+    raise jwt.InvalidTokenError(f"Algoritmo JWT não suportado: {alg}")
+
 def require_auth(f):
     """Valida JWT do Supabase e injeta g.usuario_id."""
     @wraps(f)
@@ -12,27 +53,11 @@ def require_auth(f):
 
         token = auth.split(" ", 1)[1]
         try:
-            payload = jwt.decode(
-                token,
-                current_app.config["JWT_SECRET"],
-                algorithms=["HS256"],
-                audience=current_app.config["SUPABASE_JWT_AUDIENCE"],
-                issuer=f"{current_app.config['SUPABASE_URL']}/auth/v1" if current_app.config["SUPABASE_URL"] else None
-            )
-        except jwt.InvalidTokenError:
-            try:
-                payload = jwt.decode(
-                    token,
-                    current_app.config["JWT_SECRET"],
-                    algorithms=["HS256"],
-                    options={"verify_aud": False, "verify_iss": False}
-                )
-            except jwt.ExpiredSignatureError:
-                return jsonify({"erro": "Token expirado"}), 401
-            except jwt.InvalidTokenError as e:
-                return jsonify({"erro": f"Token inválido: {str(e)}"}), 401
+            payload = _decode_supabase_token(token)
         except jwt.ExpiredSignatureError:
             return jsonify({"erro": "Token expirado"}), 401
+        except jwt.InvalidTokenError as e:
+            return jsonify({"erro": f"Token inválido: {str(e)}"}), 401
 
         g.usuario_id = payload.get("sub")
         g.jwt_payload = payload
